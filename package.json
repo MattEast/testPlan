@@ -6,11 +6,17 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:e2e": "cypress run --e2e",
+    "test:e2e:open": "cypress open --e2e",
+    "test:component": "cypress run --component",
+    "test:component:open": "cypress open --component",
+    "test": "npm run test:e2e && npm run test:component"
   },
   "dependencies": {
     "next": "15.1.0",
     "react": "19.2.3",
+    "react-devtools": "^7.0.1",
     "react-dom": "19.2.3"
   },
   "devDependencies": {
@@ -19,6 +25,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "babel-plugin-react-compiler": "1.0.0",
+    "cypress": "^13.17.0",
     "eslint": "^9",
     "eslint-config-next": "15.1.0",
     "tailwindcss": "^4",

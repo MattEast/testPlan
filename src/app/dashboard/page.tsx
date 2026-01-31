@@ -3,30 +3,23 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-
-interface SavedTestPlan {
-  id: string;
-  testPlanName: string;
-  introduction: string;
-  projectDisco: string;
-  projectName: string;
-  epics: string[];
-  jiraResults: any[];
-  createdAt: string;
-  updatedAt: string;
-}
+import { PublishedTestPlan, SavedTestPlan } from "@/types";
+import { getPublishedTestPlans, getSavedTestPlans } from "@/lib/storage";
 
 export default function Dashboard() {
   const router = useRouter();
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [username, setUsername] = useState("");
+  const [role, setRole] = useState<"user" | "admin">("user");
   const [savedTestPlans, setSavedTestPlans] = useState<SavedTestPlan[]>([]);
+  const [publishedTestPlans, setPublishedTestPlans] = useState<PublishedTestPlan[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     // Check if user is logged in
     const loggedIn = sessionStorage.getItem("isLoggedIn");
     const storedUsername = sessionStorage.getItem("username");
+    const storedRole = sessionStorage.getItem("role");
 
     if (!loggedIn) {
       router.push("/login");
@@ -35,16 +28,11 @@ export default function Dashboard() {
 
     setIsLoggedIn(true);
     setUsername(storedUsername || "");
+    setRole(storedRole === "admin" ? "admin" : "user");
 
     // Load saved test plans from localStorage
-    const saved = localStorage.getItem("savedTestPlans");
-    if (saved) {
-      try {
-        setSavedTestPlans(JSON.parse(saved));
-      } catch (e) {
-        console.error("Failed to parse saved test plans", e);
-      }
-    }
+    setSavedTestPlans(getSavedTestPlans());
+    setPublishedTestPlans(getPublishedTestPlans());
 
     setLoading(false);
   }, [router]);
@@ -59,6 +47,10 @@ export default function Dashboard() {
 
   const handleLoadTestPlan = (planId: string) => {
     router.push(`/?loadPlanId=${planId}`);
+  };
+
+  const handleOpenPublishedPlan = (planId: string) => {
+    router.push(`/plan/${planId}`);
   };
 
   if (loading) {
@@ -167,7 +159,7 @@ export default function Dashboard() {
                 </svg>
               </div>
               <h3 className="text-2xl font-bold text-gray-800 dark:text-white mb-2">
-                Load Saved Test Plan
+                  Load Draft Test Plan
               </h3>
               <p className="text-gray-600 dark:text-gray-400">
                 {savedTestPlans.length === 0
@@ -181,7 +173,7 @@ export default function Dashboard() {
           {savedTestPlans.length > 0 && (
             <div id="saved-plans" className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8">
               <h3 className="text-2xl font-bold text-gray-800 dark:text-white mb-6">
-                Your Saved Test Plans
+                Your Draft Test Plans
               </h3>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {savedTestPlans.map((plan) => (
@@ -214,7 +206,52 @@ export default function Dashboard() {
                       onClick={() => handleLoadTestPlan(plan.id)}
                       className="w-full bg-purple-500 hover:bg-purple-600 text-white font-semibold py-2 rounded-lg transition-colors text-sm"
                     >
-                      Load Plan
+                      Load Draft
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Published Test Plans Section */}
+          {role === "admin" && publishedTestPlans.length > 0 && (
+            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8 mt-8">
+              <h3 className="text-2xl font-bold text-gray-800 dark:text-white mb-6">
+                Your Published Test Plans
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {publishedTestPlans.map((plan) => (
+                  <div
+                    key={plan.id}
+                    className="bg-gray-50 dark:bg-gray-700 rounded-lg p-6 border border-gray-200 dark:border-gray-600 hover:border-indigo-500 transition-colors"
+                  >
+                    <div className="mb-4">
+                      <h4 className="text-lg font-semibold text-gray-800 dark:text-white truncate">
+                        {plan.testPlanName}
+                      </h4>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                        Published: {plan.publishedAt}
+                      </p>
+                    </div>
+                    <div className="space-y-2 mb-4 text-sm text-gray-600 dark:text-gray-300">
+                      <p>
+                        <strong>Project:</strong> {plan.projectName || "N/A"}
+                      </p>
+                      <p>
+                        <strong>Epics:</strong> {plan.epics.length}
+                      </p>
+                      <p>
+                        <strong>Stories:</strong>{" "}
+                        {plan.jiraResults.filter((r) => r.fields.issuetype.name === "Story")
+                          .length}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => handleOpenPublishedPlan(plan.id)}
+                      className="w-full bg-indigo-500 hover:bg-indigo-600 text-white font-semibold py-2 rounded-lg transition-colors text-sm"
+                    >
+                      Open Plan
                     </button>
                   </div>
                 ))}

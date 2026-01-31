@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest) {
   try {
-    const { jql, username, password } = await request.json();
+    const { jql, username, password, instanceUrl } = await request.json();
 
     if (!jql) {
       return NextResponse.json(
@@ -11,7 +11,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const jiraUrl = process.env.JIRA_INSTANCE_URL;
+    const jiraUrl = instanceUrl || process.env.JIRA_INSTANCE_URL;
     
     // Use provided credentials or fall back to env variables
     const email = username || process.env.JIRA_EMAIL;

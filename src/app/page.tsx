@@ -3,85 +3,86 @@
 import { FormEvent, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-
-interface JiraIssue {
-  key: string;
-  fields: {
-    summary: string;
-    status: { name: string };
-    assignee: { displayName: string } | null;
-    priority: { name: string } | null;
-    issuetype: { name: string };
-    parent?: { key: string; fields: { summary: string } };
-  };
-}
-
-interface SavedTestPlan {
-  id: string;
-  testPlanName: string;
-  introduction: string;
-  projectDisco: string;
-  projectName: string;
-  testApproach: TestApproachSection[];
-  epics: string[];
-  jiraResults: JiraIssue[];
-  createdAt: string;
-  updatedAt: string;
-}
-
-interface TestApproachSection {
-  name: string;
-  details: string;
-}
+import { JiraIssue, PublishedTestPlan, SavedTestPlan, TestApproachSection, UIState } from "@/types";
+import { TEST_APPROACH_OPTIONS, JIRA_BASE_URL, STORAGE_KEYS, SESSION_KEYS } from "@/lib/constants";
+import { getSavedTestPlans, getPublishedTestPlans, savePublishedTestPlan, saveTestPlan, deleteTestPlan, getJiraConfig } from "@/lib/storage";
+import { fetchJiraProjectData } from "@/lib/jira";
+import { generateMarkdown, generateHtml, downloadFile, generateExportFilename } from "@/lib/export";
 
 export default function Home() {
   const router = useRouter();
+  
+  // User state
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [role, setRole] = useState<"user" | "admin">("user");
+  
+  // JIRA config
   const [jiraEmail, setJiraEmail] = useState("");
   const [jiraApiToken, setJiraApiToken] = useState("");
+  const [jiraInstanceUrl, setJiraInstanceUrl] = useState("");
+  
+  // Test plan data
   const [testPlanName, setTestPlanName] = useState("");
   const [introduction, setIntroduction] = useState("");
   const [projectDisco, setProjectDisco] = useState("");
   const [projectName, setProjectName] = useState("");
   const [epic, setEpic] = useState("");
   const [epics, setEpics] = useState<string[]>([]);
+  const [testApproach, setTestApproach] = useState<TestApproachSection[]>([]);
+  
+  // JIRA results
   const [jiraResults, setJiraResults] = useState<JiraIssue[]>([]);
   const [jiraLoading, setJiraLoading] = useState(false);
   const [jiraError, setJiraError] = useState("");
-  const [showNameForm, setShowNameForm] = useState(true);
-  const [showTitle, setShowTitle] = useState(false);
-  const [showIntroductionForm, setShowIntroductionForm] = useState(false);
-  const [showProjectDiscoForm, setShowProjectDiscoForm] = useState(false);
-  const [showProjectNameForm, setShowProjectNameForm] = useState(false);
-  const [showEpicForm, setShowEpicForm] = useState(false);
-  const [showTestPlan, setShowTestPlan] = useState(false);
+  const [jiraConfigMessage, setJiraConfigMessage] = useState("");
+  
+  // Saved test plans
   const [savedTestPlans, setSavedTestPlans] = useState<SavedTestPlan[]>([]);
-  const [showSaveModal, setShowSaveModal] = useState(false);
+  const [publishedTestPlans, setPublishedTestPlans] = useState<PublishedTestPlan[]>([]);
+  
+  // Save modal state
   const [saveTestPlanName, setSaveTestPlanName] = useState("");
   const [saveError, setSaveError] = useState("");
   const [saveSuccess, setSaveSuccess] = useState("");
-  const [showLoadModal, setShowLoadModal] = useState(false);
-  const [showPublishModal, setShowPublishModal] = useState(false);
+  
+  // Publish state
   const [publishFormat, setPublishFormat] = useState<"markdown" | "html">("markdown");
   const [isPublishing, setIsPublishing] = useState(false);
-  const [showTestApproachForm, setShowTestApproachForm] = useState(false);
-  const [testApproachOptions] = useState([
-    "End to End Testing",
-    "Feature Testing",
-    "UAT",
-  ]);
-  const [testApproach, setTestApproach] = useState<TestApproachSection[]>([]);
-  const [showUpdateSectionModal, setShowUpdateSectionModal] = useState(false);
+  
+  // Update section state
   const [selectedSectionIndex, setSelectedSectionIndex] = useState<number | null>(null);
   const [sectionDetails, setSectionDetails] = useState("");
+  
+  // Consolidated UI state
+  const [uiState, setUiState] = useState<UIState>({
+    nameForm: true,
+    title: false,
+    introductionForm: false,
+    projectDiscoForm: false,
+    projectNameForm: false,
+    testApproachForm: false,
+    epicForm: false,
+    testPlan: false,
+    saveModal: false,
+    loadModal: false,
+    publishModal: false,
+    updateSectionModal: false,
+    openModal: false,
+  });
+
+  // Helper to update UI state
+  const updateUiState = (updates: Partial<UIState>) => {
+    setUiState((prev) => ({ ...prev, ...updates }));
+  };
 
   useEffect(() => {
     // Check if user is logged in
-    const loggedIn = sessionStorage.getItem("isLoggedIn");
-    const storedUsername = sessionStorage.getItem("username");
-    const storedPassword = sessionStorage.getItem("password");
+    const loggedIn = sessionStorage.getItem(SESSION_KEYS.IS_LOGGED_IN);
+    const storedUsername = sessionStorage.getItem(SESSION_KEYS.USERNAME);
+    const storedPassword = sessionStorage.getItem(SESSION_KEYS.PASSWORD);
+    const storedRole = sessionStorage.getItem(SESSION_KEYS.ROLE);
 
     if (!loggedIn) {
       router.push("/login");
@@ -89,58 +90,47 @@ export default function Home() {
       setIsLoggedIn(true);
       setUsername(storedUsername || "");
       setPassword(storedPassword || "");
+      setRole(storedRole === "admin" ? "admin" : "user");
     }
 
     // Load JIRA configuration from localStorage if available
-    const jiraConfig = localStorage.getItem("jiraConfig");
-    if (jiraConfig) {
-      try {
-        const config = JSON.parse(jiraConfig);
-        setJiraEmail(config.email || "");
-        setJiraApiToken(config.apiToken || "");
-      } catch (e) {
-        console.error("Failed to parse JIRA config", e);
-      }
+    const jiraConfig = getJiraConfig();
+    if (jiraConfig.instanceUrl || jiraConfig.email || jiraConfig.apiToken) {
+      setJiraInstanceUrl(jiraConfig.instanceUrl || "");
+      setJiraEmail(jiraConfig.email || "");
+      setJiraApiToken(jiraConfig.apiToken || "");
     }
 
     // Load saved test plans from localStorage
-    const saved = localStorage.getItem("savedTestPlans");
-    if (saved) {
-      try {
-        setSavedTestPlans(JSON.parse(saved));
-      } catch (e) {
-        console.error("Failed to parse saved test plans", e);
-      }
-    }
+    const plans = getSavedTestPlans();
+    setSavedTestPlans(plans);
+
+    // Load published test plans from localStorage
+    const publishedPlans = getPublishedTestPlans();
+    setPublishedTestPlans(publishedPlans);
 
     // Check if loadPlanId is in query params
     const params = new URLSearchParams(window.location.search);
     const loadPlanId = params.get("loadPlanId");
-    if (loadPlanId && saved) {
-      try {
-        const plans = JSON.parse(saved);
-        const plan = plans.find((p: SavedTestPlan) => p.id === loadPlanId);
-        if (plan) {
-          setTestPlanName(plan.testPlanName);
-          setIntroduction(plan.introduction);
-          setProjectDisco(plan.projectDisco);
-          setProjectName(plan.projectName);
-          setTestApproach(plan.testApproach || []);
-          setEpics(plan.epics);
-          setJiraResults(plan.jiraResults);
-          setShowNameForm(false);
-          setShowTestPlan(true);
-        }
-      } catch (e) {
-        console.error("Failed to load test plan", e);
+    if (loadPlanId && plans.length > 0) {
+      const plan = plans.find((p) => p.id === loadPlanId);
+      if (plan) {
+        setTestPlanName(plan.testPlanName);
+        setIntroduction(plan.introduction);
+        setProjectDisco(plan.projectDisco);
+        setProjectName(plan.projectName);
+        setTestApproach(plan.testApproach || []);
+        setEpics(plan.epics);
+        setJiraResults(plan.jiraResults);
+        updateUiState({ nameForm: false, testPlan: true });
       }
     }
   }, [router]);
 
   const handleLogout = () => {
-    sessionStorage.removeItem("isLoggedIn");
-    sessionStorage.removeItem("username");
-    sessionStorage.removeItem("password");
+    sessionStorage.removeItem(SESSION_KEYS.IS_LOGGED_IN);
+    sessionStorage.removeItem(SESSION_KEYS.USERNAME);
+    sessionStorage.removeItem(SESSION_KEYS.PASSWORD);
     router.push("/login");
   };
 
@@ -174,6 +164,10 @@ export default function Home() {
       updatedAt: new Date().toLocaleString(),
     };
 
+    // Save to localStorage using utility
+    saveTestPlan(newTestPlan);
+    
+    // Update local state
     let updatedPlans = [...savedTestPlans];
     if (existingIndex >= 0) {
       updatedPlans[existingIndex] = newTestPlan;
@@ -182,13 +176,10 @@ export default function Home() {
       updatedPlans = [...updatedPlans, newTestPlan];
       setSaveSuccess(`Test plan "${saveTestPlanName}" saved!`);
     }
-
-    localStorage.setItem("savedTestPlans", JSON.stringify(updatedPlans));
     setSavedTestPlans(updatedPlans);
     setSaveTestPlanName("");
-
     setTimeout(() => {
-      setShowSaveModal(false);
+      updateUiState({ saveModal: false });
       setSaveSuccess("");
     }, 2000);
   };
@@ -203,16 +194,50 @@ export default function Home() {
       setTestApproach(plan.testApproach || []);
       setEpics(plan.epics);
       setJiraResults(plan.jiraResults);
-      setShowLoadModal(false);
-      setShowTestPlan(true);
+      updateUiState({ loadModal: false, testPlan: true });
     }
   };
 
   const handleDeleteTestPlan = (planId: string) => {
+    deleteTestPlan(planId);
     const updatedPlans = savedTestPlans.filter((p) => p.id !== planId);
-    localStorage.setItem("savedTestPlans", JSON.stringify(updatedPlans));
     setSavedTestPlans(updatedPlans);
   };
+
+  const handlePublishPlan = () => {
+    if (role !== "admin") {
+      alert("Publishing is restricted to admins.");
+      return;
+    }
+    const publishedPlan: PublishedTestPlan = {
+      id: Date.now().toString(),
+      testPlanName: testPlanName || "Untitled Test Plan",
+      introduction,
+      projectDisco,
+      projectName,
+      testApproach,
+      epics,
+      jiraResults,
+      createdAt: new Date().toLocaleString(),
+      updatedAt: new Date().toLocaleString(),
+      publishedAt: new Date().toLocaleString(),
+    };
+
+    savePublishedTestPlan(publishedPlan);
+    setPublishedTestPlans((prev) => [...prev, publishedPlan]);
+    router.push(`/plan/${publishedPlan.id}`);
+  };
+
+  const handleOpenPublishedPlan = (planId: string) => {
+    updateUiState({ openModal: false });
+    router.push(`/plan/${planId}`);
+  };
+
+  const jiraBrowseBaseUrl = jiraInstanceUrl
+    ? `${jiraInstanceUrl.replace(/\/$/, "")}/browse/`
+    : JIRA_BASE_URL;
+
+  const isAdmin = role === "admin";
 
   const handleNewTestPlan = () => {
     setTestPlanName("");
@@ -224,155 +249,24 @@ export default function Home() {
     setEpics([]);
     setJiraResults([]);
     setJiraError("");
-    setShowNameForm(true);
-    setShowTitle(false);
-    setShowIntroductionForm(false);
-    setShowProjectDiscoForm(false);
-    setShowProjectNameForm(false);
-    setShowTestApproachForm(false);
-    setShowEpicForm(false);
-    setShowTestPlan(false);
+    updateUiState({
+      nameForm: true,
+      title: false,
+      introductionForm: false,
+      projectDiscoForm: false,
+      projectNameForm: false,
+      testApproachForm: false,
+      epicForm: false,
+      testPlan: false,
+    });
   };
 
-  const generateMarkdown = (): string => {
-    let content = `# Test Plan: ${testPlanName}\n\n`;
-    content += `**Generated:** ${new Date().toLocaleString()}\n\n`;
-    
-    if (introduction) {
-      content += `## Introduction\n${introduction}\n\n`;
-    }
-    
-    if (projectDisco) {
-      content += `## Project Discovery\n${projectDisco}\n\n`;
-    }
-    
-    if (projectName) {
-      content += `## Project\n**Project Name:** ${projectName}\n\n`;
-    }
-    
-    if (testApproach.length > 0) {
-      content += `## Test Approach\n`;
-      testApproach.forEach((section) => {
-        content += `### ${section.name}\n`;
-        if (section.details) {
-          content += `${section.details}\n\n`;
-        }
-      });
-      content += `\n`;
-    }
-    
-    if (epics.length > 0) {
-      content += `## Epics\n${epics.map((e) => `- ${e}`).join("\n")}\n\n`;
-    }
-    
-    if (jiraResults.length > 0) {
-      content += `## JIRA Integration Results\n\n`;
-      
-      // Group by epic
-      const epicsMap = new Map<string, JiraIssue[]>();
-      jiraResults.forEach((issue) => {
-        if (issue.fields.issuetype.name === "Epic") {
-          epicsMap.set(issue.key, []);
-        }
-      });
-      
-      jiraResults.forEach((issue) => {
-        if (issue.fields.issuetype.name === "Story" && issue.fields.parent) {
-          const parentKey = issue.fields.parent.key;
-          if (epicsMap.has(parentKey)) {
-            epicsMap.get(parentKey)!.push(issue);
-          }
-        }
-      });
-      
-      epicsMap.forEach((stories, epicKey) => {
-        const epic = jiraResults.find((i) => i.key === epicKey);
-        if (epic) {
-          content += `### Epic: ${epic.key} - ${epic.fields.summary}\n`;
-          content += `**Status:** ${epic.fields.status.name}\n`;
-          
-          if (stories.length > 0) {
-            content += `\n**User Stories:**\n`;
-            stories.forEach((story) => {
-              content += `- **${story.key}**: ${story.fields.summary}\n`;
-              content += `  - Status: ${story.fields.status.name}\n`;
-              if (story.fields.assignee) {
-                content += `  - Assignee: ${story.fields.assignee.displayName}\n`;
-              }
-              if (story.fields.priority) {
-                content += `  - Priority: ${story.fields.priority.name}\n`;
-              }
-            });
-          } else {
-            content += `\n**No user stories found for this epic.**\n`;
-          }
-          content += `\n`;
-        }
-      });
-    }
-    
-    return content;
+  const handleCreateTestPlanWithName = (name: string) => {
+    setTestPlanName(name);
+    updateUiState({ nameForm: false, testPlan: true });
   };
 
-  const generateHtml = (): string => {
-    const markdownContent = generateMarkdown();
-    
-    // Simple markdown to HTML conversion
-    let html = markdownContent
-      .replace(/# (.*)/g, "<h1>$1</h1>")
-      .replace(/## (.*)/g, "<h2>$1</h2>")
-      .replace(/### (.*)/g, "<h3>$1</h3>")
-      .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
-      .replace(/- (.*)/g, "<li>$1</li>");
-    
-    // Wrap lists in <ul> tags
-    html = html.replace(/(<li>.*?<\/li>)/gs, (match) => `<ul>${match}</ul>`);
-    
-    // Split by line and wrap paragraphs
-    html = html
-      .split("\n")
-      .map((line) => {
-        if (
-          line.startsWith("<h") ||
-          line.startsWith("<ul") ||
-          line.startsWith("<li") ||
-          line.trim() === ""
-        ) {
-          return line;
-        }
-        return line ? `<p>${line}</p>` : "";
-      })
-      .join("\n");
-    
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${testPlanName}</title>
-  <style>
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-      line-height: 1.6;
-      max-width: 900px;
-      margin: 0 auto;
-      padding: 20px;
-      background-color: #f5f5f5;
-      color: #333;
-    }
-    h1, h2, h3 { color: #1e40af; margin-top: 20px; }
-    h1 { border-bottom: 3px solid #1e40af; padding-bottom: 10px; }
-    strong { color: #111; }
-    ul { background: #f9f9f9; padding-left: 30px; border-left: 4px solid #1e40af; margin: 10px 0; }
-    li { margin: 8px 0; }
-    p { margin: 10px 0; }
-  </style>
-</head>
-<body>
-${html}
-</body>
-</html>`;
-  };
+
 
   const handlePublish = async () => {
     setIsPublishing(true);
@@ -382,63 +276,29 @@ ${html}
       const emailToUse = jiraEmail || username;
       const tokenToUse = jiraApiToken || password;
       
-      const epicJql = `project = "${projectName}" AND issuetype = Epic`;
-      
-      const epicResponse = await fetch("/api/jira", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jql: epicJql,
-          username: emailToUse,
-          password: tokenToUse,
-        }),
-      });
-      
-      if (!epicResponse.ok) {
-        throw new Error("Failed to fetch epics");
-      }
-      
-      const epicData = await epicResponse.json();
-      const epicsFromJira = epicData.issues || [];
-      let allIssues: JiraIssue[] = [...epicsFromJira];
-      
-      for (const epicIssue of epicsFromJira) {
-        const storyJql = `issuetype = Story AND parent = ${epicIssue.key} ORDER BY created DESC`;
-        
-        const storyResponse = await fetch("/api/jira", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            jql: storyJql,
-            username: emailToUse,
-            password: tokenToUse,
-          }),
-        });
-        
-        if (storyResponse.ok) {
-          const storyData = await storyResponse.json();
-          allIssues = [...allIssues, ...(storyData.issues || [])];
-        }
-      }
-      
+      const allIssues = await fetchJiraProjectData(projectName, emailToUse, tokenToUse, jiraInstanceUrl);
       setJiraResults(allIssues);
       
       // Generate and download the file
-      const content = publishFormat === "markdown" ? generateMarkdown() : generateHtml();
-      const filename = `${testPlanName.replace(/\s+/g, "_")}_${new Date().toISOString().split("T")[0]}.${publishFormat === "markdown" ? "md" : "html"}`;
-      const blob = new Blob([content], {
-        type: publishFormat === "markdown" ? "text/markdown" : "text/html",
-      });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
+      const testPlanData = {
+        testPlanName,
+        introduction,
+        projectDisco,
+        projectName,
+        testApproach,
+        epics,
+        jiraResults: allIssues,
+      };
       
-      setShowPublishModal(false);
+      const content = publishFormat === "markdown" 
+        ? generateMarkdown(testPlanData)
+        : generateHtml(testPlanData);
+      
+      const filename = generateExportFilename(testPlanName, publishFormat);
+      const mimeType = publishFormat === "markdown" ? "text/markdown" : "text/html";
+      
+      downloadFile(content, filename, mimeType);
+      updateUiState({ publishModal: false });
     } catch (error) {
       console.error("Error publishing test plan:", error);
       alert("Error publishing test plan. Please try again.");
@@ -450,27 +310,60 @@ ${html}
   const handleNameSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (testPlanName.trim()) {
-      setShowNameForm(false);
-      setShowTitle(true);
-      setTimeout(() => {
-        setShowTitle(false);
-        setShowIntroductionForm(true);
-      }, 2000);
+      handleCreateTestPlanWithName(testPlanName);
     }
   };
 
   const handleIntroductionSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (introduction.trim()) {
-      setShowIntroductionForm(false);
-      setShowProjectNameForm(true);
+      updateUiState({
+        introductionForm: false,
+        testPlan: true,
+        projectDiscoForm: false,
+        projectNameForm: false,
+        testApproachForm: false,
+        epicForm: false,
+        title: false,
+      });
     }
+  };
+
+  const handleOpenIntroductionForm = () => {
+    updateUiState({
+      introductionForm: true,
+      testPlan: false,
+      projectDiscoForm: false,
+      projectNameForm: false,
+      testApproachForm: false,
+      epicForm: false,
+      title: false,
+    });
   };
 
   const handleProjectDiscoSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    setShowProjectDiscoForm(false);
-    setShowTestApproachForm(true);
+    updateUiState({
+      projectDiscoForm: false,
+      testPlan: true,
+      projectNameForm: false,
+      introductionForm: false,
+      testApproachForm: false,
+      epicForm: false,
+      title: false,
+    });
+  };
+
+  const handleOpenProjectDiscoForm = () => {
+    updateUiState({
+      projectDiscoForm: true,
+      testPlan: false,
+      projectNameForm: false,
+      introductionForm: false,
+      testApproachForm: false,
+      epicForm: false,
+      title: false,
+    });
   };
 
   const handleTestApproachSelect = (sectionName: string) => {
@@ -483,14 +376,33 @@ ${html}
   };
 
   const handleTestApproachDone = () => {
-    setShowTestApproachForm(false);
-    setShowEpicForm(true);
+    updateUiState({
+      testApproachForm: false,
+      testPlan: true,
+      projectDiscoForm: false,
+      projectNameForm: false,
+      introductionForm: false,
+      epicForm: false,
+      title: false,
+    });
+  };
+
+  const handleOpenTestApproachForm = () => {
+    updateUiState({
+      testApproachForm: true,
+      testPlan: false,
+      projectDiscoForm: false,
+      projectNameForm: false,
+      introductionForm: false,
+      epicForm: false,
+      title: false,
+    });
   };
 
   const handleUpdateSection = (index: number) => {
     setSelectedSectionIndex(index);
     setSectionDetails(testApproach[index].details);
-    setShowUpdateSectionModal(true);
+    updateUiState({ updateSectionModal: true });
   };
 
   const handleSaveSectionDetails = () => {
@@ -498,7 +410,7 @@ ${html}
       const updatedApproach = [...testApproach];
       updatedApproach[selectedSectionIndex].details = sectionDetails;
       setTestApproach(updatedApproach);
-      setShowUpdateSectionModal(false);
+      updateUiState({ updateSectionModal: false });
       setSelectedSectionIndex(null);
       setSectionDetails("");
     }
@@ -516,7 +428,7 @@ ${html}
     if (epic.trim()) {
       setEpics([...epics, epic]);
     }
-    setShowEpicForm(false);
+    updateUiState({ epicForm: false });
     setJiraLoading(true);
     setJiraError("");
     setJiraResults([]);
@@ -526,91 +438,77 @@ ${html}
       const emailToUse = jiraEmail || username;
       const tokenToUse = jiraApiToken || password;
 
-      // First, fetch all epics in the project
-      const epicJql = `project = "${projectName}" AND issuetype = Epic`;
-
-      const epicResponse = await fetch("/api/jira", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ 
-          jql: epicJql,
-          username: emailToUse,
-          password: tokenToUse 
-        }),
-      });
-
-      if (!epicResponse.ok) {
-        const error = await epicResponse.json();
-        setJiraError(error.error || "Failed to query JIRA for epics");
-        setShowTestPlan(true);
-        setJiraLoading(false);
-        return;
-      }
-
-      const epicData = await epicResponse.json();
-      const epicsFromJira = epicData.issues || [];
-
-      // Now fetch all stories for each epic
-      let allIssues: JiraIssue[] = [...epicsFromJira];
-
-      for (const epicIssue of epicsFromJira) {
-        const storyJql = `issuetype = Story AND parent = ${epicIssue.key} ORDER BY created DESC`;
-
-        const storyResponse = await fetch("/api/jira", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ 
-            jql: storyJql,
-            username: emailToUse,
-            password: tokenToUse 
-          }),
-        });
-
-        if (storyResponse.ok) {
-          const storyData = await storyResponse.json();
-          allIssues = [...allIssues, ...(storyData.issues || [])];
-        }
-      }
-
+      const allIssues = await fetchJiraProjectData(projectName, emailToUse, tokenToUse, jiraInstanceUrl);
       setJiraResults(allIssues);
-      setShowTestPlan(true);
+      updateUiState({ testPlan: true });
     } catch (error) {
-      setJiraError("Error querying JIRA");
-      console.error(error);
-      setShowTestPlan(true);
+      const errorMessage = error instanceof Error ? error.message : "Error querying JIRA";
+      setJiraError(errorMessage);
+      updateUiState({ testPlan: true });
     } finally {
       setJiraLoading(false);
     }
   };
 
   const handleAddMoreEpics = () => {
+    if (!jiraEmail.trim() || !jiraApiToken.trim()) {
+      setJiraConfigMessage("Please configure JIRA in Admin before adding epics.");
+      return;
+    }
+    setJiraConfigMessage("");
     setEpic("");
-    setShowTestPlan(false);
-    setShowEpicForm(true);
+    updateUiState({ testPlan: false, epicForm: true });
   };
+
+  const shouldShowAddSections =
+    !introduction ||
+    !projectName ||
+    !projectDisco ||
+    testApproach.length === 0 ||
+    epics.length === 0;
 
   const handleAddProjectDisco = () => {
     setProjectDisco("");
-    setShowTestPlan(false);
-    setShowProjectDiscoForm(true);
+    updateUiState({
+      testPlan: false,
+      projectDiscoForm: true,
+      projectNameForm: false,
+      introductionForm: false,
+      testApproachForm: false,
+      epicForm: false,
+      title: false,
+    });
   };
 
   const handleProjectDiscoCancel = () => {
     setProjectDisco("");
-    setShowProjectDiscoForm(false);
-    setShowEpicForm(true);
+    updateUiState({ projectDiscoForm: false, testPlan: true });
   };
-
   const handleProjectNameSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (projectName.trim()) {
-      setShowProjectNameForm(false);
-      setShowProjectDiscoForm(true);
+      updateUiState({
+        projectNameForm: false,
+        testPlan: true,
+        projectDiscoForm: false,
+        introductionForm: false,
+        testApproachForm: false,
+        epicForm: false,
+        title: false,
+      });
     }
+  };
+
+  const handleOpenProjectNameForm = () => {
+    updateUiState({
+      projectNameForm: true,
+      testPlan: false,
+      projectDiscoForm: false,
+      introductionForm: false,
+      testApproachForm: false,
+      epicForm: false,
+      title: false,
+    });
   };
 
   const handleStartOver = () => {
@@ -622,13 +520,16 @@ ${html}
     setEpics([]);
     setJiraResults([]);
     setJiraError("");
-    setShowNameForm(true);
-    setShowTitle(false);
-    setShowIntroductionForm(false);
-    setShowProjectDiscoForm(false);
-    setShowProjectNameForm(false);
-    setShowEpicForm(false);
-    setShowTestPlan(false);
+    updateUiState({
+      nameForm: true,
+      title: false,
+      introductionForm: false,
+      projectDiscoForm: false,
+      projectNameForm: false,
+      testApproachForm: false,
+      epicForm: false,
+      testPlan: false,
+    });
   };
 
   return (
@@ -671,39 +572,41 @@ ${html}
             </div>
 
             {/* Test Plan Actions (only show when viewing test plan) */}
-            {showTestPlan && (
+            {uiState.testPlan && (
               <div className="mb-6">
                 <p className="text-xs text-gray-600 dark:text-gray-400 uppercase font-semibold mb-3">
                   Test Plan Options
                 </p>
                 <nav className="space-y-2">
                   <button
-                    onClick={() => setShowSaveModal(true)}
-                    className="w-full flex items-center gap-2 px-4 py-2 rounded-lg bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400 hover:bg-green-100 dark:hover:bg-green-900/30 transition-colors text-sm font-medium"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                    </svg>
-                    Save Plan
-                  </button>
-                  <button
-                    onClick={() => setShowLoadModal(true)}
+                    onClick={() => updateUiState({ loadModal: true })}
                     className="w-full flex items-center gap-2 px-4 py-2 rounded-lg bg-purple-50 dark:bg-purple-900/20 text-purple-700 dark:text-purple-400 hover:bg-purple-100 dark:hover:bg-purple-900/30 transition-colors text-sm font-medium"
                   >
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                     </svg>
-                    Load Plan
+                    Load Draft
                   </button>
                   <button
-                    onClick={() => setShowPublishModal(true)}
+                    onClick={() => updateUiState({ publishModal: true })}
                     className="w-full flex items-center gap-2 px-4 py-2 rounded-lg bg-orange-50 dark:bg-orange-900/20 text-orange-700 dark:text-orange-400 hover:bg-orange-100 dark:hover:bg-orange-900/30 transition-colors text-sm font-medium"
                   >
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
                     </svg>
-                    Publish
+                    Download Test Plan
                   </button>
+                  {isAdmin && (
+                    <button
+                      onClick={() => updateUiState({ openModal: true })}
+                      className="w-full flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/30 transition-colors text-sm font-medium"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v14m7-7H5" />
+                      </svg>
+                      Open Plan
+                    </button>
+                  )}
                   <button
                     onClick={handleNewTestPlan}
                     className="w-full flex items-center gap-2 px-4 py-2 rounded-lg bg-cyan-50 dark:bg-cyan-900/20 text-cyan-700 dark:text-cyan-400 hover:bg-cyan-100 dark:hover:bg-cyan-900/30 transition-colors text-sm font-medium"
@@ -751,7 +654,7 @@ ${html}
       {/* Main Content */}
       <main className={`flex-1 flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black ${isLoggedIn ? 'ml-64' : ''}`}>
         <div className="flex min-h-screen w-full max-w-2xl flex-col items-center justify-center py-32 px-16 bg-white dark:bg-black relative">
-        {showNameForm && (
+        {uiState.nameForm && (
           <div className="flex flex-col items-center gap-8 w-full max-w-md">
             <h1 className="text-3xl font-semibold text-black dark:text-zinc-50">
               Add Test Plan Name
@@ -767,13 +670,13 @@ ${html}
                 type="submit"
                 className="w-full bg-blue-500 hover:bg-blue-600 text-white font-semibold py-3 rounded-lg transition-colors"
               >
-                Next
+                Save
               </button>
             </form>
           </div>
         )}
 
-        {showTitle && (
+        {uiState.title && (
           <div className="flex flex-col items-center justify-center gap-8 w-full">
             <h1 className="text-4xl font-bold text-black dark:text-zinc-50 text-center">
               Test Plan for {testPlanName}
@@ -784,7 +687,29 @@ ${html}
           </div>
         )}
 
-        {showIntroductionForm && (
+        {!uiState.nameForm && !uiState.title && !uiState.introductionForm && !uiState.projectNameForm && !uiState.projectDiscoForm && !uiState.testApproachForm && !uiState.epicForm && testPlanName && !uiState.testPlan && (
+          <div className="flex flex-col items-center gap-8 w-full max-w-md">
+            <h1 className="text-3xl font-semibold text-black dark:text-zinc-50">
+              What would you like to add first?
+            </h1>
+            <div className="w-full flex flex-col gap-3">
+              <button
+                onClick={handleOpenTestApproachForm}
+                className="w-full bg-purple-500 hover:bg-purple-600 text-white font-semibold py-3 rounded-lg transition-colors"
+              >
+                Add Test Approach
+              </button>
+              <button
+                onClick={handleOpenIntroductionForm}
+                className="w-full bg-blue-500 hover:bg-blue-600 text-white font-semibold py-3 rounded-lg transition-colors"
+              >
+                Add Introduction
+              </button>
+            </div>
+          </div>
+        )}
+
+        {uiState.introductionForm && (
           <div className="flex flex-col items-center gap-8 w-full max-w-md">
             <h1 className="text-3xl font-semibold text-black dark:text-zinc-50">
               Add an Introduction to Test Plan
@@ -800,13 +725,13 @@ ${html}
                 type="submit"
                 className="w-full bg-blue-500 hover:bg-blue-600 text-white font-semibold py-3 rounded-lg transition-colors"
               >
-                Next
+                Save
               </button>
             </form>
           </div>
         )}
 
-        {showProjectDiscoForm && (
+        {uiState.projectDiscoForm && (
           <div className="flex flex-col items-center gap-8 w-full max-w-md">
             <h1 className="text-3xl font-semibold text-black dark:text-zinc-50">
               Please Add Project Disco if Known
@@ -821,29 +746,22 @@ ${html}
               <div className="flex gap-4 w-full">
                 <button
                   type="submit"
-                  className="flex-1 bg-blue-500 hover:bg-blue-600 text-white font-semibold py-3 rounded-lg transition-colors"
+                  className="w-full bg-blue-500 hover:bg-blue-600 text-white font-semibold py-3 rounded-lg transition-colors"
                 >
-                  Submit
-                </button>
-                <button
-                  type="button"
-                  onClick={handleProjectDiscoCancel}
-                  className="flex-1 bg-gray-500 hover:bg-gray-600 text-white font-semibold py-3 rounded-lg transition-colors"
-                >
-                  Skip
+                  Save
                 </button>
               </div>
             </form>
           </div>
         )}
 
-        {showTestApproachForm && (
+        {uiState.testApproachForm && (
           <div className="flex flex-col items-center gap-8 w-full max-w-md">
             <h1 className="text-3xl font-semibold text-black dark:text-zinc-50">
-              Select Test Approach Sections
+              Select Test Approach
             </h1>
             <div className="w-full flex flex-col gap-4">
-              {testApproachOptions.map((option) => (
+              {TEST_APPROACH_OPTIONS.map((option) => (
                 <label
                   key={option}
                   className="flex items-center gap-3 p-4 border-2 border-zinc-300 rounded-lg cursor-pointer hover:border-blue-500 dark:border-zinc-700 dark:hover:border-blue-500 transition-colors"
@@ -861,21 +779,15 @@ ${html}
             <div className="flex gap-4 w-full">
               <button
                 onClick={handleTestApproachDone}
-                className="flex-1 bg-blue-500 hover:bg-blue-600 text-white font-semibold py-3 rounded-lg transition-colors"
+                className="w-full bg-blue-500 hover:bg-blue-600 text-white font-semibold py-3 rounded-lg transition-colors"
               >
-                Done
-              </button>
-              <button
-                onClick={() => setShowTestApproachForm(false)}
-                className="flex-1 bg-gray-500 hover:bg-gray-600 text-white font-semibold py-3 rounded-lg transition-colors"
-              >
-                Skip
+                Save
               </button>
             </div>
           </div>
         )}
 
-        {showProjectNameForm && (
+        {uiState.projectNameForm && (
           <div className="flex flex-col items-center gap-8 w-full max-w-md">
             <h1 className="text-3xl font-semibold text-black dark:text-zinc-50">
               Enter Project Name
@@ -885,7 +797,6 @@ ${html}
                 type="text"
                 value={projectName}
                 onChange={(e) => setProjectName(e.target.value)}
-                placeholder="Enter JIRA project name (e.g., TEST, PROJ)..."
                 className="w-full p-4 border border-zinc-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-50"
               />
               <button
@@ -898,7 +809,7 @@ ${html}
           </div>
         )}
 
-        {showEpicForm && (
+        {uiState.epicForm && (
           <div className="flex flex-col items-center gap-8 w-full max-w-md">
             <h1 className="text-3xl font-semibold text-black dark:text-zinc-50">
               Add Epic
@@ -941,29 +852,136 @@ ${html}
           </div>
         )}
 
-        {showTestPlan && (
+        {uiState.testPlan && (
           <div className="flex flex-col items-center gap-8 w-full max-w-2xl">
-            <h1 className="text-4xl font-bold text-black dark:text-zinc-50">
-              Test Plan for {testPlanName}
-            </h1>
-            <div className="w-full bg-zinc-100 dark:bg-zinc-900 p-6 rounded-lg">
-              <h2 className="text-xl font-semibold text-black dark:text-zinc-50 mb-4">
-                Introduction
-              </h2>
-              <p className="text-zinc-700 dark:text-zinc-300 whitespace-pre-wrap">
-                {introduction}
-              </p>
+            <div className="w-full flex flex-col items-center gap-4">
+              <h1 className="text-4xl font-bold text-black dark:text-zinc-50 text-center">
+                Test Plan for {testPlanName}
+              </h1>
             </div>
+
+            {/* Project Name Section */}
+            {projectName && (
+              <div className="w-full bg-zinc-100 dark:bg-zinc-900 p-6 rounded-lg border border-green-300 dark:border-green-700">
+                <div className="flex justify-between items-start mb-4">
+                  <h2 className="text-xl font-semibold text-black dark:text-zinc-50">
+                    Project
+                  </h2>
+                  <button
+                    onClick={handleOpenProjectNameForm}
+                    className="px-3 py-1 bg-green-500 hover:bg-green-600 text-white text-sm rounded font-medium"
+                  >
+                    Edit
+                  </button>
+                </div>
+                <p className="text-zinc-700 dark:text-zinc-300">
+                  <strong>Project Name:</strong> {projectName}
+                </p>
+              </div>
+            )}
+
+            {/* Introduction Section */}
+            {introduction && (
+              <div className="w-full bg-zinc-100 dark:bg-zinc-900 p-6 rounded-lg border border-blue-300 dark:border-blue-700">
+                <div className="flex justify-between items-start mb-4">
+                  <h2 className="text-xl font-semibold text-black dark:text-zinc-50">
+                    Introduction
+                  </h2>
+                  <button
+                    onClick={handleOpenIntroductionForm}
+                    className="px-3 py-1 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded font-medium"
+                  >
+                    Edit
+                  </button>
+                </div>
+                <p className="text-zinc-700 dark:text-zinc-300 whitespace-pre-wrap">
+                  {introduction}
+                </p>
+              </div>
+            )}
+
+            {/* Project Discovery Section */}
             {projectDisco && (
-              <div className="w-full bg-zinc-100 dark:bg-zinc-900 p-6 rounded-lg">
-                <h2 className="text-xl font-semibold text-black dark:text-zinc-50 mb-4">
-                  Project Discovery
-                </h2>
+              <div className="w-full bg-zinc-100 dark:bg-zinc-900 p-6 rounded-lg border border-purple-300 dark:border-purple-700">
+                <div className="flex justify-between items-start mb-4">
+                  <h2 className="text-xl font-semibold text-black dark:text-zinc-50">
+                    Project Discovery
+                  </h2>
+                  <button
+                    onClick={handleOpenProjectDiscoForm}
+                    className="px-3 py-1 bg-purple-500 hover:bg-purple-600 text-white text-sm rounded font-medium"
+                  >
+                    Edit
+                  </button>
+                </div>
                 <p className="text-zinc-700 dark:text-zinc-300 whitespace-pre-wrap">
                   {projectDisco}
                 </p>
               </div>
             )}
+
+            {/* Test Approach Section */}
+            {testApproach.length > 0 && (
+              <div className="w-full bg-gray-50 dark:bg-zinc-800 p-6 rounded-lg mb-6">
+                <h2 className="text-2xl font-semibold text-black dark:text-white mb-4">
+                  Test Approach
+                </h2>
+                <div className="space-y-3">
+                  {testApproach.map((section, index) => (
+                    <div
+                      key={index}
+                      className="bg-white dark:bg-zinc-900 p-4 rounded-lg border border-gray-200 dark:border-zinc-700"
+                    >
+                      <div className="flex justify-between items-start mb-2">
+                        <h3 className="font-semibold text-black dark:text-white">
+                          {section.name}
+                        </h3>
+                        <button
+                          onClick={() => handleUpdateSection(index)}
+                          className="bg-blue-500 hover:bg-blue-600 text-white font-semibold px-3 py-1 rounded text-sm transition-colors"
+                        >
+                          Update
+                        </button>
+                      </div>
+                      {section.details && (
+                        <p className="text-gray-600 dark:text-gray-400 text-sm mt-2">
+                          {section.details}
+                        </p>
+                      )}
+                      {!section.details && (
+                        <p className="text-gray-400 italic text-sm">No details added yet.</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Epics Section */}
+            {epics.length > 0 && (
+              <div className="w-full bg-zinc-100 dark:bg-zinc-900 p-6 rounded-lg border border-red-300 dark:border-red-700">
+                <div className="flex justify-between items-start mb-4">
+                  <h2 className="text-xl font-semibold text-black dark:text-zinc-50">
+                    Epics
+                  </h2>
+                  <button
+                    onClick={handleAddMoreEpics}
+                    className="px-3 py-1 bg-red-500 hover:bg-red-600 text-white text-sm rounded font-medium"
+                  >
+                    Edit
+                  </button>
+                </div>
+                <ul className="list-disc list-inside space-y-2">
+                  {epics.map((epic, index) => (
+                    <li key={index} className="text-zinc-700 dark:text-zinc-300">
+                      {epic}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* JIRA Results Section */}
             {jiraLoading && (
               <div className="w-full bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 p-6 rounded-lg">
                 <p className="text-blue-700 dark:text-blue-400 font-semibold">
@@ -1024,7 +1042,7 @@ ${html}
                                   <td className="border border-zinc-300 dark:border-zinc-700 px-4 py-2">
                                     <div className="flex flex-col gap-1">
                                       <a
-                                        href={`https://eastmatt.atlassian.net/browse/${epic.key}`}
+                                        href={`${jiraBrowseBaseUrl}${epic.key}`}
                                         target="_blank"
                                         rel="noopener noreferrer"
                                         className="font-bold text-purple-700 dark:text-purple-400 hover:underline"
@@ -1038,7 +1056,7 @@ ${html}
                                   </td>
                                   <td className="border border-zinc-300 dark:border-zinc-700 px-4 py-2">
                                     <a
-                                      href={`https://eastmatt.atlassian.net/browse/${story.key}`}
+                                      href={`${jiraBrowseBaseUrl}${story.key}`}
                                       target="_blank"
                                       rel="noopener noreferrer"
                                       className="text-blue-600 dark:text-blue-400 hover:underline font-semibold"
@@ -1065,70 +1083,89 @@ ${html}
               </div>
             )}
 
-            {/* Test Approach Section */}
-            {testApproach.length > 0 && (
-              <div className="w-full bg-gray-50 dark:bg-zinc-800 p-6 rounded-lg mb-6">
-                <h2 className="text-2xl font-semibold text-black dark:text-white mb-4">
-                  Test Approach Sections
+            {/* Add Sections Options */}
+            {shouldShowAddSections && (
+              <div className="w-full bg-zinc-50 dark:bg-zinc-900 p-6 rounded-lg border-2 border-dashed border-zinc-300 dark:border-zinc-700">
+                <h2 className="text-lg font-semibold text-black dark:text-zinc-50 mb-4">
+                  Add Sections
                 </h2>
-                <div className="space-y-3">
-                  {testApproach.map((section, index) => (
-                    <div
-                      key={index}
-                      className="bg-white dark:bg-zinc-900 p-4 rounded-lg border border-gray-200 dark:border-zinc-700"
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {!introduction && (
+                    <button
+                      onClick={handleOpenIntroductionForm}
+                      className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white font-medium rounded-lg transition-colors text-sm"
                     >
-                      <div className="flex justify-between items-start mb-2">
-                        <h3 className="font-semibold text-black dark:text-white">
-                          {section.name}
-                        </h3>
-                        <button
-                          onClick={() => handleUpdateSection(index)}
-                          className="bg-blue-500 hover:bg-blue-600 text-white font-semibold px-3 py-1 rounded text-sm transition-colors"
-                        >
-                          Update
-                        </button>
-                      </div>
-                      {section.details && (
-                        <p className="text-gray-600 dark:text-gray-400 text-sm mt-2">
-                          {section.details}
-                        </p>
-                      )}
-                      {!section.details && (
-                        <p className="text-gray-400 italic text-sm">No details added yet.</p>
-                      )}
-                    </div>
-                  ))}
+                      + Introduction
+                    </button>
+                  )}
+                  {!projectName && (
+                    <button
+                      onClick={handleOpenProjectNameForm}
+                      className="px-4 py-2 bg-green-500 hover:bg-green-600 text-white font-medium rounded-lg transition-colors text-sm"
+                    >
+                      + Project Name
+                    </button>
+                  )}
+                  {!projectDisco && (
+                    <button
+                      onClick={handleOpenProjectDiscoForm}
+                      className="px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white font-medium rounded-lg transition-colors text-sm"
+                    >
+                      + Project Discovery
+                    </button>
+                  )}
+                  {testApproach.length === 0 && (
+                    <button
+                      onClick={handleOpenTestApproachForm}
+                      className="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white font-medium rounded-lg transition-colors text-sm"
+                    >
+                      + Test Approach
+                    </button>
+                  )}
+                  {epics.length === 0 && (
+                    <button
+                      onClick={handleAddMoreEpics}
+                      className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white font-medium rounded-lg transition-colors text-sm"
+                    >
+                      + Epics
+                    </button>
+                  )}
                 </div>
               </div>
             )}
 
             <div className="flex flex-col gap-3 w-full">
-              {!projectDisco && (
+              {jiraConfigMessage && (
+                <p className="text-sm text-red-500 font-medium">
+                  {jiraConfigMessage}
+                </p>
+              )}
+              <button
+                onClick={() => updateUiState({ saveModal: true })}
+                className="w-full bg-green-500 hover:bg-green-600 text-white font-semibold py-3 rounded-lg transition-colors"
+              >
+                Save Plan
+              </button>
+              {isAdmin && (
                 <button
-                  onClick={handleAddProjectDisco}
-                  className="w-full bg-purple-500 hover:bg-purple-600 text-white font-semibold py-3 rounded-lg transition-colors"
+                  onClick={handlePublishPlan}
+                  className="w-full bg-indigo-500 hover:bg-indigo-600 text-white font-semibold py-3 rounded-lg transition-colors"
                 >
-                  Add Project Discovery
+                  Publish Plan
                 </button>
               )}
               <button
-                onClick={handleAddMoreEpics}
+                onClick={() => updateUiState({ publishModal: true })}
                 className="w-full bg-orange-500 hover:bg-orange-600 text-white font-semibold py-3 rounded-lg transition-colors"
               >
-                Add More Epics
-              </button>
-              <button
-                onClick={handleStartOver}
-                className="w-full bg-gray-500 hover:bg-gray-600 text-white font-semibold py-3 rounded-lg transition-colors"
-              >
-                Start Over
+                Download Test Plan
               </button>
             </div>
           </div>
         )}
 
         {/* Save Test Plan Modal */}
-        {showSaveModal && (
+        {uiState.saveModal && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
             <div className="bg-white dark:bg-zinc-900 rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
               <h2 className="text-2xl font-semibold text-black dark:text-white mb-4">
@@ -1156,7 +1193,7 @@ ${html}
                 </button>
                 <button
                   onClick={() => {
-                    setShowSaveModal(false);
+                    updateUiState({ saveModal: false });
                     setSaveTestPlanName("");
                     setSaveError("");
                   }}
@@ -1169,12 +1206,12 @@ ${html}
           </div>
         )}
 
-        {/* Load Test Plan Modal */}
-        {showLoadModal && (
+        {/* Load Draft Test Plan Modal */}
+        {uiState.loadModal && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
             <div className="bg-white dark:bg-zinc-900 rounded-lg p-6 max-w-md w-full mx-4 shadow-xl max-h-96 overflow-y-auto">
               <h2 className="text-2xl font-semibold text-black dark:text-white mb-4">
-                Load Test Plan
+                Load Draft Test Plan
               </h2>
               {savedTestPlans.length === 0 ? (
                 <p className="text-zinc-600 dark:text-zinc-400 mb-4">
@@ -1202,7 +1239,7 @@ ${html}
                           onClick={() => handleLoadTestPlan(plan.id)}
                           className="flex-1 bg-purple-500 hover:bg-purple-600 text-white font-semibold py-2 rounded text-sm transition-colors"
                         >
-                          Load
+                          Load Draft
                         </button>
                         <button
                           onClick={() => handleDeleteTestPlan(plan.id)}
@@ -1216,7 +1253,7 @@ ${html}
                 </div>
               )}
               <button
-                onClick={() => setShowLoadModal(false)}
+                onClick={() => updateUiState({ loadModal: false })}
                 className="w-full bg-zinc-300 hover:bg-zinc-400 dark:bg-zinc-700 dark:hover:bg-zinc-600 text-black dark:text-white font-semibold py-2 rounded-lg transition-colors"
               >
                 Close
@@ -1225,15 +1262,15 @@ ${html}
           </div>
         )}
 
-        {/* Publish Test Plan Modal */}
-        {showPublishModal && (
+        {/* Download Test Plan Modal */}
+        {uiState.publishModal && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
             <div className="bg-white dark:bg-zinc-900 rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
               <h2 className="text-2xl font-semibold text-black dark:text-white mb-4">
-                Publish Test Plan
+                Download Test Plan
               </h2>
               <p className="text-zinc-600 dark:text-zinc-400 mb-4 text-sm">
-                Select format and publish your test plan. This will re-fetch the latest data from JIRA and create a final version.
+                Select format and download your test plan. This will re-fetch the latest data from JIRA and create a final version.
               </p>
               
               <div className="mb-4">
@@ -1270,10 +1307,10 @@ ${html}
                   disabled={isPublishing}
                   className="flex-1 bg-orange-500 hover:bg-orange-600 disabled:bg-orange-300 text-white font-semibold py-2 rounded-lg transition-colors"
                 >
-                  {isPublishing ? "Publishing..." : "Publish"}
+                  {isPublishing ? "Downloading..." : "Download"}
                 </button>
                 <button
-                  onClick={() => setShowPublishModal(false)}
+                  onClick={() => updateUiState({ publishModal: false })}
                   disabled={isPublishing}
                   className="flex-1 bg-zinc-300 hover:bg-zinc-400 dark:bg-zinc-700 dark:hover:bg-zinc-600 disabled:opacity-50 text-black dark:text-white font-semibold py-2 rounded-lg transition-colors"
                 >
@@ -1284,8 +1321,57 @@ ${html}
           </div>
         )}
 
+        {/* Open Published Plan Modal */}
+        {uiState.openModal && isAdmin && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white dark:bg-zinc-900 rounded-lg p-6 max-w-md w-full mx-4 shadow-xl max-h-96 overflow-y-auto">
+              <h2 className="text-2xl font-semibold text-black dark:text-white mb-4">
+                Open Published Plan
+              </h2>
+              {publishedTestPlans.length === 0 ? (
+                <p className="text-zinc-600 dark:text-zinc-400 mb-4">
+                  No published plans found.
+                </p>
+              ) : (
+                <div className="space-y-3 mb-4">
+                  {publishedTestPlans.map((plan) => (
+                    <div
+                      key={plan.id}
+                      className="bg-zinc-100 dark:bg-zinc-800 p-4 rounded-lg border border-zinc-200 dark:border-zinc-700"
+                    >
+                      <div className="flex justify-between items-start mb-2">
+                        <div className="flex-1">
+                          <p className="font-semibold text-black dark:text-white">
+                            {plan.testPlanName}
+                          </p>
+                          <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                            Published: {plan.publishedAt}
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handleOpenPublishedPlan(plan.id)}
+                        className="w-full bg-indigo-500 hover:bg-indigo-600 text-white font-semibold py-2 rounded text-sm transition-colors"
+                      >
+                        Open Plan
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <button
+                onClick={() => updateUiState({ openModal: false })}
+                className="w-full bg-zinc-300 hover:bg-zinc-400 dark:bg-zinc-700 dark:hover:bg-zinc-600 text-black dark:text-white font-semibold py-2 rounded-lg transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        )}
+
+
         {/* Update Section Modal */}
-        {showUpdateSectionModal && selectedSectionIndex !== null && (
+        {uiState.updateSectionModal && selectedSectionIndex !== null && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
             <div className="bg-white dark:bg-zinc-900 rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
               <h2 className="text-2xl font-semibold text-black dark:text-white mb-4">
@@ -1306,7 +1392,7 @@ ${html}
                 </button>
                 <button
                   onClick={() => {
-                    setShowUpdateSectionModal(false);
+                    updateUiState({ updateSectionModal: false });
                     setSelectedSectionIndex(null);
                     setSectionDetails("");
                   }}

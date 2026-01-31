@@ -1,7 +1,13 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+
+interface User {
+  username: string;
+  password: string;
+  role: string;
+}
 
 export default function Login() {
   const [username, setUsername] = useState("");
@@ -9,6 +15,17 @@ export default function Login() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+
+  // Initialize default admin user on first load
+  useEffect(() => {
+    const users = localStorage.getItem("users");
+    if (!users) {
+      const defaultUsers: User[] = [
+        { username: "admin", password: "admin", role: "admin" },
+      ];
+      localStorage.setItem("users", JSON.stringify(defaultUsers));
+    }
+  }, []);
 
   const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -22,11 +39,25 @@ export default function Login() {
       return;
     }
 
+    // Validate against registered users
+    const usersData = localStorage.getItem("users");
+    const users: User[] = usersData ? JSON.parse(usersData) : [];
+    
+    const user = users.find(
+      (u) => u.username === username && u.password === password
+    );
+
+    if (!user) {
+      setError("Invalid username or password");
+      setLoading(false);
+      return;
+    }
+
     // Store credentials in sessionStorage (for demo purposes)
     // In production, this should be sent to a backend API
     sessionStorage.setItem("isLoggedIn", "true");
     sessionStorage.setItem("username", username);
-    sessionStorage.setItem("password", password);
+    sessionStorage.setItem("role", user.role);
     sessionStorage.setItem("loginTime", new Date().toLocaleString());
 
     // Redirect to dashboard
@@ -100,13 +131,13 @@ export default function Login() {
 
           <div className="mt-8 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
             <p className="text-sm text-blue-900 dark:text-blue-300 font-medium mb-2">
-              Demo Credentials:
+              Default Admin Credentials:
             </p>
             <p className="text-xs text-blue-800 dark:text-blue-400">
-              Username: <span className="font-mono">demo</span>
+              Username: <span className="font-mono">admin</span>
             </p>
             <p className="text-xs text-blue-800 dark:text-blue-400">
-              Password: <span className="font-mono">demo</span>
+              Password: <span className="font-mono">admin</span>
             </p>
           </div>
         </div>

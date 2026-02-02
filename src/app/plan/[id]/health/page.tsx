@@ -197,6 +197,28 @@ export default function ProjectHealthReportPage() {
     downloadCsv(`${plan?.testPlanName || "project"}_jira_report.csv`, rows);
   };
 
+  const getRiskCellColor = (likelihood: string, impact: string) => {
+    const colorMap: Record<string, Record<string, string | null>> = {
+      "Very likly": {
+        Minnor: "#FFFF99",
+        Visable: "#FFCC00",
+        Introumption: "#FF0000",
+      },
+      "Quite likley": {
+        Minnor: null,
+        Visable: "#FFFF99",
+        Introumption: "#FF9900",
+      },
+      Unlikley: {
+        Minnor: null,
+        Visable: null,
+        Introumption: "#FFCC00",
+      },
+    };
+
+    return colorMap[likelihood]?.[impact] || null;
+  };
+
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-zinc-50 dark:bg-black">
@@ -330,55 +352,74 @@ export default function ProjectHealthReportPage() {
           </div>
 
           <div className="w-full bg-zinc-100 dark:bg-zinc-900 p-6 rounded-lg border border-zinc-300 dark:border-zinc-700">
-            <h2 className="text-xl font-semibold text-black dark:text-zinc-50 mb-4">
-              Build Report
-            </h2>
-            <input
-              type="text"
-              value={testMoFilter}
-              onChange={(e) => setTestMoFilter(e.target.value)}
-              placeholder="Filter by case, issue, or title"
-              className="w-full mb-4 px-3 py-2 border border-zinc-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-zinc-800 dark:border-zinc-700 dark:text-white"
-            />
             <div className="overflow-x-auto">
-              <table className="w-full border-collapse text-sm">
+              <table className="w-full border-collapse text-sm table-fixed">
                 <thead>
                   <tr className="bg-zinc-200 dark:bg-zinc-800">
-                    <th className="border border-zinc-300 dark:border-zinc-700 px-3 py-2 text-left">Case ID</th>
-                    <th className="border border-zinc-300 dark:border-zinc-700 px-3 py-2 text-left">Priority</th>
-                    <th className="border border-zinc-300 dark:border-zinc-700 px-3 py-2 text-left">Complexity</th>
-                    <th className="border border-zinc-300 dark:border-zinc-700 px-3 py-2 text-left">Impact of Failure</th>
-                    <th className="border border-zinc-300 dark:border-zinc-700 px-3 py-2 text-left">Likelihood of Failure</th>
-                    <th className="border border-zinc-300 dark:border-zinc-700 px-3 py-2 text-left">Can be Automated</th>
-                    <th className="border border-zinc-300 dark:border-zinc-700 px-3 py-2 text-left">Automation Status</th>
-                    <th className="border border-zinc-300 dark:border-zinc-700 px-3 py-2 text-left">Status</th>
-                    <th className="border border-zinc-300 dark:border-zinc-700 px-3 py-2 text-left">Release</th>
-                    <th className="border border-zinc-300 dark:border-zinc-700 px-3 py-2 text-left">Issues</th>
+                    <th
+                      colSpan={2}
+                      className="border border-zinc-300 dark:border-zinc-700 px-3 py-2 text-left font-semibold uppercase text-xs tracking-wide text-zinc-600 dark:text-zinc-300"
+                    >
+                      Risk profile counts
+                    </th>
+                    <th
+                      className="border border-zinc-300 dark:border-zinc-700 px-3 py-2 text-left"
+                      colSpan={3}
+                    >
+                      <span className="uppercase text-xs tracking-wide text-zinc-600 dark:text-zinc-300">
+                        Impact of failure
+                      </span>
+                    </th>
+                  </tr>
+                  <tr className="bg-zinc-200 dark:bg-zinc-800">
+                    <th className="border border-zinc-300 dark:border-zinc-700 px-3 py-2 text-left w-10"></th>
+                    <th className="border border-zinc-300 dark:border-zinc-700 px-3 py-2 text-left w-36"></th>
+                    <th className="border border-zinc-300 dark:border-zinc-700 px-3 py-2 text-center font-semibold">Minnor</th>
+                    <th className="border border-zinc-300 dark:border-zinc-700 px-3 py-2 text-center font-semibold">Visable</th>
+                    <th className="border border-zinc-300 dark:border-zinc-700 px-3 py-2 text-center font-semibold">Introumption</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredTestMoCases.length > 0 ? (
-                    filteredTestMoCases.slice(0, 50).map((row, index) => (
-                      <tr key={index} className="hover:bg-zinc-50 dark:hover:bg-zinc-800">
-                        <td className="border border-zinc-300 dark:border-zinc-700 px-3 py-2">{row.id}</td>
-                        <td className="border border-zinc-300 dark:border-zinc-700 px-3 py-2">{row.priority || row.custom_priority}</td>
-                        <td className="border border-zinc-300 dark:border-zinc-700 px-3 py-2">{row.custom_complexity}</td>
-                        <td className="border border-zinc-300 dark:border-zinc-700 px-3 py-2">{row.custom_impact_of_failure}</td>
-                        <td className="border border-zinc-300 dark:border-zinc-700 px-3 py-2">{row.custom_likelihood_of_failure}</td>
-                        <td className="border border-zinc-300 dark:border-zinc-700 px-3 py-2">{row.custom_can_be_automated}</td>
-                        <td className="border border-zinc-300 dark:border-zinc-700 px-3 py-2">{row.custom_automation_status}</td>
-                        <td className="border border-zinc-300 dark:border-zinc-700 px-3 py-2">{row.status}</td>
-                        <td className="border border-zinc-300 dark:border-zinc-700 px-3 py-2">{row.custom_release}</td>
-                        <td className="border border-zinc-300 dark:border-zinc-700 px-3 py-2">{row.custom_issues}</td>
-                      </tr>
-                    ))
-                  ) : (
-                    <tr>
-                      <td colSpan={10} className="border border-zinc-300 dark:border-zinc-700 px-3 py-4 text-center text-zinc-500">
-                        No TestMo data available.
+                  {[
+                    "Very likly",
+                    "Quite likley",
+                    "Unlikley",
+                  ].map((rowLabel, index) => (
+                    <tr
+                      key={rowLabel}
+                      className="odd:bg-white even:bg-zinc-50 dark:odd:bg-zinc-900 dark:even:bg-zinc-800"
+                    >
+                      {index === 0 && (
+                        <td
+                          rowSpan={3}
+                          className="border border-zinc-300 dark:border-zinc-700 px-2 py-2 font-semibold text-center"
+                        >
+                          <span className="inline-block [writing-mode:vertical-rl] [text-orientation:mixed]">
+                            Likelihood of failure
+                          </span>
+                        </td>
+                      )}
+                      <td className="border border-zinc-300 dark:border-zinc-700 px-3 py-2 font-semibold">
+                        {rowLabel}
                       </td>
+                      {[
+                        "Minnor",
+                        "Visable",
+                        "Introumption",
+                      ].map((impact) => {
+                        const color = getRiskCellColor(rowLabel, impact);
+                        return (
+                          <td
+                            key={`${rowLabel}-${impact}`}
+                            className="border border-zinc-300 dark:border-zinc-700 px-3 py-2 text-center font-semibold"
+                            style={color ? { backgroundColor: color } : undefined}
+                          >
+                            0
+                          </td>
+                        );
+                      })}
                     </tr>
-                  )}
+                  ))}
                 </tbody>
               </table>
             </div>
